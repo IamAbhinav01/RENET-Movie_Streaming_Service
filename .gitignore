@@ -1,3 +1,5 @@
 .env
 node_modules
 dist
+src\public\data\uploads
+src/public/data/uploads
