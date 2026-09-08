@@ -22,6 +22,7 @@
   "devDependencies": {
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
+    "@types/multer": "^2.2.0",
     "@types/node": "^26.5.0",
     "tsup": "^8.5.1",
     "tsx": "^4.23.13",
@@ -33,6 +34,8 @@
     "express": "^5.2.1",
     "http-status-code": "^2.1.0",
     "http-status-codes": "^2.3.0",
+    "multer": "^2.3.0",
+    "multi-part": "^4.0.0",
     "nodemon": "^3.1.14"
   }
 }
