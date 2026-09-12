@@ -69,7 +69,8 @@ const processVideo_for_HLS = async (
 
       '-c:v:0',
       'libx264', //The :v:0 flag applies the settings to the video part of pair #0
-
+      '-profile:v:0',
+      'high',
       '-b:v:0',
       '5000k', //5000k is the recommended target bitrate for high-quality 1080p at 30 frames per second (fps).
       // It provides enough data data to prevent the video from pixelating during high-motion scenes (like sports or action).
@@ -101,7 +102,8 @@ const processVideo_for_HLS = async (
 
       '-c:v:1',
       'libx264',
-
+      '-profile:v:1',
+      'high',
       '-b:v:1',
       '2500k',
 
@@ -196,6 +198,91 @@ const processVideo_for_HLS = async (
       'aac',
       '-b:a:4',
       '64k',
+
+      /*
+       * -------------------------------------------------------
+       * Encoding settings
+       * -------------------------------------------------------
+       */
+
+      '-preset',
+      'veryfast',
+
+      /*
+       * Important for ABR segment alignment.
+       *
+       * For a 30 FPS source:
+       *
+       * 6 seconds × 30 FPS = 180 frames
+       */
+      '-g',
+      '180',
+
+      '-keyint_min',
+      '180',
+
+      '-sc_threshold',
+      '0',
+
+      /*
+       * -------------------------------------------------------
+       * HLS
+       * -------------------------------------------------------
+       */
+
+      '-f',
+      'hls',
+
+      '-hls_time',
+      '6',
+
+      '-hls_playlist_type',
+      'vod',
+
+      /*
+       * Use fragmented MP4 instead of MPEG-TS.
+       */
+      '-hls_segment_type',
+      'fmp4',
+
+      /*
+       * Each variant gets its own init file.
+       */
+      '-hls_fmp4_init_filename',
+      'init.mp4',
+
+      /*
+       * Each variant gets:
+       *
+       * 1080p/segment000.m4s
+       * 720p/segment000.m4s
+       * etc.
+       */
+      '-hls_segment_filename',
+      `${outputPath}/%v/segment%03d.m4s`,
+
+      /*
+       * Tell FFmpeg about the different variants.
+       *
+       * v:0 + a:0 = 1080p
+       * v:1 + a:1 = 720p
+       * ...
+       */
+      '-var_stream_map',
+      'v:0,a:0,name:1080p v:1,a:1,name:720p v:2,a:2,name:480p v:3,a:3,name:360p v:4,a:4,name:144p',
+
+      /*
+       * Generate master playlist.
+       */
+      '-master_pl_name',
+      'master.m3u8',
+
+      /*
+       * Output playlist for each variant.
+       *
+       * %v is replaced with variant index.
+       */
+      `${outputPath}/%v/playlist.m3u8`,
     ];
   } catch (err) {
     console.log('error occured , err : ', err);
