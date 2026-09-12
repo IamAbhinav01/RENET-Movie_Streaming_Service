@@ -1,6 +1,7 @@
 import { resolutions, type Resolution } from '../utils/resolution.js';
 import fs from 'fs/promises';
 import path from 'path';
+import { spawn } from 'child_process';
 // const printResolutions = (): void => {
 //   resolutions.forEach((resolution: Resolution) => {
 //     const width = resolution.width;
