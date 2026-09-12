@@ -1,5 +1,6 @@
 import { type Request, type Response } from 'express';
 import { StatusCodes } from 'http-status-codes';
+import { randomUUID } from 'crypto';
 import fs from 'fs/promises';
 import path from 'path';
 import { processVideo_for_HLS } from '../services/video_hls.services.js';
@@ -20,7 +21,7 @@ const uploadVideo = async (req: Request, res: Response) => {
     });
   } else {
     const inputPath = req.file.path;
-    const outputPath = path.resolve('src/public/output', `${Date.now()}`);
+    const outputPath = path.resolve('src/public/output', `${randomUUID()}`);
     logger.info(`succefully sent file to service layer for processing`);
     processVideo_for_HLS(inputPath, outputPath, (err, masterPlaylist) => {
       if (err) {
