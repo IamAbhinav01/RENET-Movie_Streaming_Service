@@ -11,7 +11,3 @@ export const resolutions: Resolution[] = [
   { width: 640, height: 360, bitRate: 800 }, // 360p
   { width: 256, height: 144, bitRate: 250 }, //144p
 ];
-
-export interface Resolutions {
-  resolutions: Resolution[];
-}
