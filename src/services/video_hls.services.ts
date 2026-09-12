@@ -3,7 +3,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import { spawn } from 'child_process';
 import { createRequire } from 'module';
-import ffprobe from 'ffprobe-static';
+import { logger } from '../config/logger.config.js';
 
 // const printResolutions = (): void => {
 //   resolutions.forEach((resolution: Resolution) => {
@@ -23,8 +23,10 @@ const processVideo_for_HLS = async (
   callback: (error: Error | null, masterPlaylist?: string) => void
 ): Promise<void> => {
   try {
+    logger.info('creating output directories, if not exists');
     await fs.mkdir(outputPath, { recursive: true });
 
+    logger.info('creating resolution directories, if not exists');
     for (const res of resolutions) {
       fs.mkdir(path.join(outputPath, `${res.height}p`), { recursive: true });
     }
@@ -293,21 +295,22 @@ const processVideo_for_HLS = async (
     ];
 
     if (!ffmpegpath) {
+      logger.error('FFmpeg binary path is not available');
       throw new Error('FFmpeg binary path is not available');
     }
 
     const ffmpeg = spawn(ffmpegpath, args);
 
     ffmpeg.stdout.on('data', (data) => {
-      console.log(`[FFmpeg] ${data}`);
+      logger.info(`[FFmpeg] ${data}`);
     });
 
     ffmpeg.stderr.on('data', (data) => {
-      console.log(`[FFmpeg] ${data}`);
+      logger.info(`[FFmpeg] ${data}`);
     });
 
     ffmpeg.on('error', (error) => {
-      console.error('FFmpeg process error:', error);
+      logger.error(`FFmpeg process error:', ${error}`);
 
       callback(error);
     });
@@ -315,7 +318,7 @@ const processVideo_for_HLS = async (
       if (code === 0) {
         const masterPlaylist = path.join(outputPath, 'master.m3u8');
 
-        console.log('HLS processing completed:', masterPlaylist);
+        logger.info(`HLS processing completed: ${masterPlaylist}`);
 
         callback(null, masterPlaylist);
       } else {
