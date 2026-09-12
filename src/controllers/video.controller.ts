@@ -1,5 +1,8 @@
 import { type Request, type Response } from 'express';
 import { StatusCodes } from 'http-status-codes';
+import fs from 'fs/promises';
+import path from 'path';
+import { processVideo_for_HLS } from '../services/video_hls.services.js';
 
 const uploadVideo = async (req: Request, res: Response) => {
   if (!req.file) {
@@ -14,7 +17,19 @@ const uploadVideo = async (req: Request, res: Response) => {
       data: {},
     });
   } else {
-    const path = req.file.path;
+    const inputPath = req.file.path;
+    const outputPath = path.resolve('src/public/output', `${Date.now()}`);
+
+    processVideo_for_HLS(inputPath, outputPath, (err, masterPlaylist) => {
+      if (err) {
+        return res.status(500).json({
+          success: false,
+          message: 'an error occured while processing the video',
+        });
+      }
+      fs.unlink(inputPath);
+    });
+
     return res.status(StatusCodes.ACCEPTED).json({
       success: true,
       error: {},
@@ -24,7 +39,7 @@ const uploadVideo = async (req: Request, res: Response) => {
         originalName: req.file.originalname,
         size: req.file.size,
         mimetype: req.file.mimetype,
-        path: path,
+        path: inputPath,
       },
     });
   }

@@ -2,6 +2,9 @@ import { resolutions, type Resolution } from '../utils/resolution.js';
 import fs from 'fs/promises';
 import path from 'path';
 import { spawn } from 'child_process';
+import { createRequire } from 'module';
+import ffprobe from 'ffprobe-static';
+
 // const printResolutions = (): void => {
 //   resolutions.forEach((resolution: Resolution) => {
 //     const width = resolution.width;
@@ -10,6 +13,9 @@ import { spawn } from 'child_process';
 // };
 
 // export { printResolutions };
+
+const require = createRequire(import.meta.url);
+const ffmpegpath: string | null = require('ffmpeg-static');
 
 const processVideo_for_HLS = async (
   inputPath: string,
@@ -285,7 +291,40 @@ const processVideo_for_HLS = async (
        */
       `${outputPath}/%v/playlist.m3u8`,
     ];
+
+    if (!ffmpegpath) {
+      throw new Error('FFmpeg binary path is not available');
+    }
+
+    const ffmpeg = spawn(ffmpegpath, args);
+
+    ffmpeg.stdout.on('data', (data) => {
+      console.log(`[FFmpeg] ${data}`);
+    });
+
+    ffmpeg.stderr.on('data', (data) => {
+      console.log(`[FFmpeg] ${data}`);
+    });
+
+    ffmpeg.on('error', (error) => {
+      console.error('FFmpeg process error:', error);
+
+      callback(error);
+    });
+    ffmpeg.on('close', (code) => {
+      if (code === 0) {
+        const masterPlaylist = path.join(outputPath, 'master.m3u8');
+
+        console.log('HLS processing completed:', masterPlaylist);
+
+        callback(null, masterPlaylist);
+      } else {
+        callback(new Error(`FFmpeg exited with code ${code}`));
+      }
+    });
   } catch (err) {
-    console.log('error occured , err : ', err);
+    callback(err instanceof Error ? err : new Error(String(err)));
   }
 };
+
+export { processVideo_for_HLS };
