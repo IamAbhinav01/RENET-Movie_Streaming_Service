@@ -27,9 +27,11 @@ const processVideo_for_HLS = async (
     await fs.mkdir(outputPath, { recursive: true });
 
     logger.info('creating resolution directories, if not exists');
-    for (const res of resolutions) {
-      fs.mkdir(path.join(outputPath, `${res.height}p`), { recursive: true });
-    }
+    await Promise.all(
+      resolutions.map((res) =>
+        fs.mkdir(path.join(outputPath, `${res.height}p`), { recursive: true })
+      )
+    );
 
     /*
   taking one input video and scaling it to multiple resolutions 
