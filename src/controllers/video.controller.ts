@@ -81,8 +81,17 @@ const uploadVideo = async (req: Request, res: Response): Promise<void> => {
  * Returns the current status of a transcoding job.
  * When status is "done", the response includes masterPlaylistUrl.
  */
-const getJobStatus = (req: Request, res: Response): void => {
+const getJobStatus = (req: Request<{ jobId: string }>, res: Response): void => {
   const { jobId } = req.params;
+
+  if (!jobId) {
+    res.status(StatusCodes.BAD_REQUEST).json({
+      success: false,
+      message: 'A valid jobId route parameter is required',
+    });
+    return;
+  }
+
   const job = getJob(jobId);
 
   if (!job) {
