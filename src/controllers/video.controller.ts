@@ -5,10 +5,18 @@ import fs from 'fs/promises';
 import path from 'path';
 import { processVideo_for_HLS } from '../services/video_hls.services.js';
 import { logger } from '../config/logger.config.js';
+import { createJob, updateJob, getJob } from '../utils/jobStore.js';
 
-const uploadVideo = async (req: Request, res: Response) => {
+/**
+ * POST /api/v1/videos/upload
+ *
+ * Accepts a video file upload and immediately returns a jobId (202 Accepted).
+ * FFmpeg transcoding runs in the background; the job store is updated when done.
+ * Poll GET /api/v1/videos/status/:jobId to track progress.
+ */
+const uploadVideo = async (req: Request, res: Response): Promise<void> => {
   if (!req.file) {
-    logger.error(`Failed, VIDEO_FILE_MISSING`);
+    logger.error('Failed, VIDEO_FILE_MISSING');
     res.status(StatusCodes.BAD_REQUEST).json({
       success: false,
       error: {
@@ -19,34 +27,76 @@ const uploadVideo = async (req: Request, res: Response) => {
       message: 'No video file was uploaded',
       data: {},
     });
-  } else {
-    const inputPath = req.file.path;
-    const outputPath = path.resolve('src/public/output', `${randomUUID()}`);
-    logger.info(`succefully sent file to service layer for processing`);
-    processVideo_for_HLS(inputPath, outputPath, (err, masterPlaylist) => {
-      if (err) {
-        logger.error(`an error occured while processing the video : ${err}`);
-        return res.status(500).json({
-          success: false,
-          message: 'an error occured while processing the video',
-        });
-      }
-      fs.unlink(inputPath);
-    });
-    logger.info('Succesfully file was uploaded');
-    return res.status(StatusCodes.ACCEPTED).json({
-      success: true,
-      error: {},
-      message: 'Succesfully file was uploaded',
-      data: {
-        filename: req.file.filename,
-        originalName: req.file.originalname,
-        size: req.file.size,
-        mimetype: req.file.mimetype,
-        path: inputPath,
-      },
-    });
+    return;
   }
+
+  const jobId = randomUUID();
+  const inputPath = req.file.path;
+  const outputPath = path.resolve('src/public/output', jobId);
+
+  // Register the job before kicking off FFmpeg
+  createJob(jobId, req.file.originalname);
+  updateJob(jobId, { status: 'processing' });
+  logger.info(`Job ${jobId} created — transcoding started for: ${req.file.originalname}`);
+
+  // Fire FFmpeg in the background; do NOT await — response is sent below
+  processVideo_for_HLS(inputPath, outputPath, async (err, _masterPlaylist) => {
+    if (err) {
+      logger.error(`Job ${jobId} failed: ${err.message}`);
+      updateJob(jobId, { status: 'failed', error: err.message });
+      return;
+    }
+
+    // Build the public streaming URL served by express.static on /streams
+    const masterPlaylistUrl = `/streams/${jobId}/master.m3u8`;
+    updateJob(jobId, { status: 'done', masterPlaylistUrl });
+    logger.info(`Job ${jobId} done — stream available at: ${masterPlaylistUrl}`);
+
+    // Clean up the raw upload now that transcoding succeeded
+    try {
+      await fs.unlink(inputPath);
+      logger.info(`Cleaned up temporary upload: ${inputPath}`);
+    } catch (unlinkErr) {
+      logger.warn(`Could not delete upload file ${inputPath}: ${unlinkErr}`);
+    }
+  });
+
+  // Respond immediately so the client isn't left waiting for FFmpeg
+  res.status(StatusCodes.ACCEPTED).json({
+    success: true,
+    message: 'Video accepted. Transcoding has started in the background.',
+    data: {
+      jobId,
+      originalName: req.file.originalname,
+      size: req.file.size,
+      mimetype: req.file.mimetype,
+      statusUrl: `/api/v1/videos/status/${jobId}`,
+    },
+  });
 };
 
-export { uploadVideo };
+/**
+ * GET /api/v1/videos/status/:jobId
+ *
+ * Returns the current status of a transcoding job.
+ * When status is "done", the response includes masterPlaylistUrl.
+ */
+const getJobStatus = (req: Request, res: Response): void => {
+  const { jobId } = req.params;
+  const job = getJob(jobId);
+
+  if (!job) {
+    res.status(StatusCodes.NOT_FOUND).json({
+      success: false,
+      message: `No job found with id: ${jobId}`,
+    });
+    return;
+  }
+
+  res.status(StatusCodes.OK).json({
+    success: true,
+    data: job,
+  });
+};
+
+export { uploadVideo, getJobStatus };

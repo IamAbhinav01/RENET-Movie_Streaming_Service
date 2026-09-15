@@ -32,7 +32,7 @@ const processVideo_for_HLS = async (
     }
 
     /*
-  taking one input video and scaleing it to multiple resolutions 
+  taking one input video and scaling it to multiple resolutions 
   [0:v] -> selects the video stream of the very first input file.
   split=5 -> creates 5 identical copies of that video stream in memory.
   [v1080][v720][v480][v360][v144] -> name these copies as 1080p,720p,..
