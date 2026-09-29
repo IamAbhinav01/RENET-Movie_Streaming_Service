@@ -168,6 +168,7 @@ const getVideoByMovieId = (
       jobId: job.jobId,
       status: job.status,
       streamUrl: job.masterPlaylistUrl,
+      videoUrl: '/videos/bbb_sunflower_1080p_30fps_normal.mp4',
     },
   });
 };

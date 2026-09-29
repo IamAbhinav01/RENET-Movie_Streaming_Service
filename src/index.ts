@@ -13,6 +13,12 @@ app.use(express.urlencoded({ extended: true }));
 
 // Serve transcoded HLS stream segments (.m3u8, .ts)
 app.use('/streams', express.static(path.resolve('src/public/output')));
+// Serve raw uploaded videos (e.g. mp4, avi) for direct playback
+app.use('/videos', express.static(path.resolve('src/public/data/uploads')));
+
+app.get('/health', (_req: Request, res: Response) => {
+  res.json({ status: 'ok', service: 'renet-streaming' });
+});
 
 app.use('/api', apiRouter);
 
