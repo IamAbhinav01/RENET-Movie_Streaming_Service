@@ -4,7 +4,7 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "dev": "npx concurrently --kill-others \"npx tsc -w\" \"nodemon dist/index.js\"",
+    "dev": "npx tsx watch --ignore \"src/public/**\" src/index.ts",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "repository": {

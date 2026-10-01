@@ -1,6 +1,6 @@
 import { type Request, type Response } from 'express';
 import { StatusCodes } from 'http-status-codes';
-import { randomUUID } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import fs from 'fs/promises';
 import path from 'path';
 import { processVideo_for_HLS } from '../services/video_hls.services.js';
@@ -11,6 +11,69 @@ import {
   getJob,
   getJobByMovieId,
 } from '../utils/jobStore.js';
+
+const uploadsDirectory = path.resolve('src/public/data/uploads');
+const randomOutputDirectory = path.resolve('src/public/output/random');
+const transcodeTasks = new Map<string, Promise<void>>();
+const transcodeFailures = new Map<string, string>();
+const videoExtensions = new Set([
+  '.avi',
+  '.mkv',
+  '.mov',
+  '.mp4',
+  '.m4v',
+  '.webm',
+]);
+
+const startRandomUploadTranscode = async (
+  fileName: string
+): Promise<{ jobId: string; streamUrl: string; ready: boolean }> => {
+  const inputPath = path.join(uploadsDirectory, fileName);
+  const fileStats = await fs.stat(inputPath);
+  const cacheKey = createHash('sha256')
+    .update(`${fileName}:${fileStats.size}:${fileStats.mtimeMs}`)
+    .digest('hex');
+  const outputPath = path.join(randomOutputDirectory, cacheKey);
+  const masterPlaylist = path.join(outputPath, 'master.m3u8');
+  const streamUrl = `/streams/random/${cacheKey}/master.m3u8`;
+
+  try {
+    await fs.access(masterPlaylist);
+    return { jobId: cacheKey, streamUrl, ready: true };
+  } catch {}
+
+  transcodeFailures.delete(cacheKey);
+  let task = transcodeTasks.get(cacheKey);
+  if (!task) {
+    task = (async () => {
+      await fs.mkdir(outputPath, { recursive: true });
+      await new Promise<void>((resolve, reject) => {
+        void processVideo_for_HLS(inputPath, outputPath, (error) =>
+          error ? reject(error) : resolve()
+        );
+      });
+    })();
+    transcodeTasks.set(cacheKey, task);
+    void task.then(
+      () => {
+        if (transcodeTasks.get(cacheKey) === task) {
+          transcodeTasks.delete(cacheKey);
+        }
+      },
+      (error: unknown) => {
+        transcodeFailures.set(
+          cacheKey,
+          error instanceof Error ? error.message : String(error)
+        );
+        if (transcodeTasks.get(cacheKey) === task) {
+          transcodeTasks.delete(cacheKey);
+        }
+      }
+    );
+  }
+
+  return { jobId: cacheKey, streamUrl, ready: false };
+};
 
 /**
  * POST /api/v1/videos/upload
@@ -59,7 +122,9 @@ const uploadVideo = async (req: Request, res: Response): Promise<void> => {
     // Build the public streaming URL served by express.static on /streams
     const masterPlaylistUrl = `/streams/${jobId}/master.m3u8`;
     updateJob(jobId, { status: 'done', masterPlaylistUrl });
-    logger.info(`Job ${jobId} done — stream available at: ${masterPlaylistUrl}`);
+    logger.info(
+      `Job ${jobId} done — stream available at: ${masterPlaylistUrl}`
+    );
 
     // Clean up the raw upload now that transcoding succeeded
     try {
@@ -173,4 +238,107 @@ const getVideoByMovieId = (
   });
 };
 
-export { uploadVideo, getJobStatus, getVideoByMovieId };
+const getRandomUploadVideo = async (
+  _req: Request,
+  res: Response
+): Promise<void> => {
+  try {
+    const files = await fs.readdir(uploadsDirectory, { withFileTypes: true });
+    const candidates = files.filter(
+      (file) =>
+        file.isFile() &&
+        videoExtensions.has(path.extname(file.name).toLowerCase())
+    );
+
+    if (candidates.length === 0) {
+      res.status(StatusCodes.NOT_FOUND).json({
+        success: false,
+        message: 'No video files are available in the uploads directory',
+      });
+      return;
+    }
+
+    const selected = candidates[0];
+    if (!selected) {
+      res.status(StatusCodes.NOT_FOUND).json({
+        success: false,
+        message: 'No video files are available in the uploads directory',
+      });
+      return;
+    }
+
+    const stream = await startRandomUploadTranscode(selected.name);
+    res.status(stream.ready ? StatusCodes.OK : StatusCodes.ACCEPTED).json({
+      success: true,
+      data: {
+        fileName: selected.name,
+        ...(stream.ready ? { streamUrl: stream.streamUrl } : {}),
+        status: stream.ready ? 'ready' : 'processing',
+        ...(!stream.ready
+          ? { statusUrl: `/api/v1/videos/random/${stream.jobId}/status` }
+          : {}),
+      },
+    });
+  } catch (error) {
+    logger.error(`Unable to select an uploaded video: ${error}`);
+    res.status(StatusCodes.INTERNAL_SERVER_ERROR).json({
+      success: false,
+      message: 'Unable to prepare a video from the uploads directory',
+    });
+  }
+};
+
+const getRandomUploadStatus = async (
+  req: Request<{ jobId: string }>,
+  res: Response
+): Promise<void> => {
+  const { jobId } = req.params;
+  if (!/^[a-f0-9]{64}$/.test(jobId)) {
+    res.status(StatusCodes.BAD_REQUEST).json({
+      success: false,
+      message: 'Invalid transcode job ID',
+    });
+    return;
+  }
+
+  const streamUrl = `/streams/random/${jobId}/master.m3u8`;
+  try {
+    await fs.access(path.join(randomOutputDirectory, jobId, 'master.m3u8'));
+    res.status(StatusCodes.OK).json({
+      success: true,
+      data: { status: 'ready', streamUrl },
+    });
+    return;
+  } catch {}
+
+  const failure = transcodeFailures.get(jobId);
+  if (failure) {
+    res.status(StatusCodes.INTERNAL_SERVER_ERROR).json({
+      success: false,
+      data: { status: 'failed' },
+      message: `Video transcode failed: ${failure}`,
+    });
+    return;
+  }
+
+  if (transcodeTasks.has(jobId)) {
+    res.status(StatusCodes.ACCEPTED).json({
+      success: true,
+      data: { status: 'processing' },
+    });
+    return;
+  }
+
+  res.status(StatusCodes.NOT_FOUND).json({
+    success: false,
+    message: 'Transcode job not found',
+  });
+};
+
+export {
+  uploadVideo,
+  getJobStatus,
+  getVideoByMovieId,
+  getRandomUploadVideo,
+  getRandomUploadStatus,
+};

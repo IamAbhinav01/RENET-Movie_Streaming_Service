@@ -17,6 +17,18 @@ import { logger } from '../config/logger.config.js';
 const require = createRequire(import.meta.url);
 const ffmpegpath: string | null = require('ffmpeg-static');
 
+const createMasterPlaylist = (): string => {
+  const lines = ['#EXTM3U', '#EXT-X-VERSION:7', '#EXT-X-INDEPENDENT-SEGMENTS'];
+  for (const resolution of resolutions) {
+    const bandwidth = Math.ceil((resolution.bitRate + 160) * 1100);
+    lines.push(
+      `#EXT-X-STREAM-INF:BANDWIDTH=${bandwidth},RESOLUTION=${resolution.width}x${resolution.height}`,
+      `${resolution.height}p/playlist.m3u8`
+    );
+  }
+  return `${lines.join('\n')}\n`;
+};
+
 const processVideo_for_HLS = async (
   inputPath: string,
   outputPath: string,
@@ -59,6 +71,8 @@ const processVideo_for_HLS = async (
 
     //arguments need to pass down to ffmpeg before hls or adaptive bitrate processing
     const args: string[] = [
+      '-y',
+      '-nostdin',
       '-i',
       inputPath,
       '-filter_complex',
@@ -248,7 +262,7 @@ const processVideo_for_HLS = async (
       '6',
 
       '-hls_playlist_type',
-      'vod',
+      'event',
 
       /*
        * Use fragmented MP4 instead of MPEG-TS.
@@ -283,12 +297,6 @@ const processVideo_for_HLS = async (
       'v:0,a:0,name:1080p v:1,a:1,name:720p v:2,a:2,name:480p v:3,a:3,name:360p v:4,a:4,name:144p',
 
       /*
-       * Generate master playlist.
-       */
-      '-master_pl_name',
-      'master.m3u8',
-
-      /*
        * Output playlist for each variant.
        *
        * %v is replaced with variant index.
@@ -302,24 +310,76 @@ const processVideo_for_HLS = async (
     }
 
     const ffmpeg = spawn(ffmpegpath, args);
+    const masterPlaylist = path.join(outputPath, 'master.m3u8');
+    let masterPublished = false;
+    let publishingMaster = false;
+
+    const publishMasterWhenReady = async (): Promise<boolean> => {
+      if (masterPublished) return true;
+      if (publishingMaster) return false;
+      publishingMaster = true;
+      try {
+        await Promise.all(
+          resolutions.map(async (resolution, index) => {
+            const variantPath = path.join(outputPath, `${resolution.height}p`);
+            await Promise.all([
+              fs.access(path.join(variantPath, 'playlist.m3u8')),
+              fs.access(path.join(variantPath, `init_${index}.mp4`)),
+              fs.access(path.join(variantPath, 'segment000.m4s')),
+            ]);
+          })
+        );
+        await fs.writeFile(masterPlaylist, createMasterPlaylist(), 'utf8');
+        masterPublished = true;
+        logger.info(`HLS master playlist is ready: ${masterPlaylist}`);
+        return true;
+      } catch {
+        return false;
+      } finally {
+        publishingMaster = false;
+      }
+    };
+
+    const readinessPoll = setInterval(() => {
+      void publishMasterWhenReady();
+    }, 1000);
+    void publishMasterWhenReady();
 
     ffmpeg.stdout.on('data', (data) => {
-      logger.info(`[FFmpeg] ${data}`);
+      const msg = String(data).trim();
+      if (msg) logger.info(`[FFmpeg] ${msg}`);
     });
 
     ffmpeg.stderr.on('data', (data) => {
-      logger.info(`[FFmpeg] ${data}`);
+      const msg = String(data);
+      if (
+        msg.includes('frame=') ||
+        msg.includes('Opening') ||
+        msg.includes('fps=') ||
+        msg.includes('[hls @')
+      ) {
+        return;
+      }
+      const trimmed = msg.trim();
+      if (trimmed) logger.info(`[FFmpeg] ${trimmed}`);
     });
 
     ffmpeg.on('error', (error) => {
+      clearInterval(readinessPoll);
       logger.error(`FFmpeg process error:', ${error}`);
 
       callback(error);
     });
-    ffmpeg.on('close', (code) => {
+    ffmpeg.on('close', async (code) => {
+      clearInterval(readinessPoll);
       if (code === 0) {
-        const masterPlaylist = path.join(outputPath, 'master.m3u8');
-
+        const ready = await publishMasterWhenReady();
+        if (!ready) {
+          callback(
+            new Error('HLS variants completed without playable playlists')
+          );
+          return;
+        }
         logger.info(`HLS processing completed: ${masterPlaylist}`);
 
         callback(null, masterPlaylist);
