@@ -1,3 +1,12 @@
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  writeFileSync,
+} from 'fs';
+import path from 'path';
+
 export type JobStatus = 'pending' | 'processing' | 'done' | 'failed';
 
 export interface Job {
@@ -13,17 +22,49 @@ export interface Job {
 
 const jobs = new Map<string, Job>();
 const movieToJobMap = new Map<string, string>();
+const jobStorePath = path.resolve('src/data/video-jobs.json');
 
-// Seed pre-existing transcoded HLS stream from public/output
-const DEFAULT_STREAM_JOB_ID = '896f319b-f6ba-4e6a-b1a8-df63ae58dec5';
-jobs.set(DEFAULT_STREAM_JOB_ID, {
-  jobId: DEFAULT_STREAM_JOB_ID,
-  status: 'done',
-  originalName: 'bbb_sunflower_1080p_30fps_normal.mp4',
-  createdAt: new Date(),
-  updatedAt: new Date(),
-  masterPlaylistUrl: `/streams/${DEFAULT_STREAM_JOB_ID}/master.m3u8`,
-});
+const persistJobs = (): void => {
+  mkdirSync(path.dirname(jobStorePath), { recursive: true });
+  const temporaryPath = `${jobStorePath}.${process.pid}.tmp`;
+  writeFileSync(temporaryPath, JSON.stringify([...jobs.values()]), 'utf8');
+  renameSync(temporaryPath, jobStorePath);
+};
+
+const loadJobs = (): void => {
+  let storedJobs: Array<Job & { createdAt: string; updatedAt: string }>;
+  try {
+    storedJobs = JSON.parse(readFileSync(jobStorePath, 'utf8'));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+    throw error;
+  }
+
+  let changed = false;
+  for (const storedJob of storedJobs) {
+    const job: Job = {
+      ...storedJob,
+      createdAt: new Date(storedJob.createdAt),
+      updatedAt: new Date(storedJob.updatedAt),
+    };
+    if (
+      job.status === 'processing' &&
+      !existsSync(
+        path.resolve('src/public/output', job.jobId, 'master.m3u8')
+      )
+    ) {
+      job.status = 'failed';
+      job.error = 'Transcoding was interrupted by a service restart';
+      changed = true;
+    }
+    jobs.set(job.jobId, job);
+    if (job.movieId) movieToJobMap.set(job.movieId, job.jobId);
+  }
+
+  if (changed) persistJobs();
+};
+
+loadJobs();
 
 /**
  * Create and register a new transcoding job.
@@ -47,6 +88,7 @@ const createJob = (
     movieToJobMap.set(movieId, jobId);
   }
 
+  persistJobs();
   return job;
 };
 
@@ -60,6 +102,7 @@ const updateJob = (
   const job = jobs.get(jobId);
   if (job) {
     Object.assign(job, { ...update, updatedAt: new Date() });
+    persistJobs();
   }
 };
 
@@ -76,12 +119,27 @@ const getJobByMovieId = (movieId: string): Job | undefined => {
   if (jobId && jobs.has(jobId)) {
     return jobs.get(jobId);
   }
-  // Return the default transcoded HLS stream linked to this movieId
-  const defaultJob = jobs.get(DEFAULT_STREAM_JOB_ID);
-  if (defaultJob) {
-    return { ...defaultJob, movieId };
-  }
   return undefined;
 };
 
-export { createJob, updateJob, getJob, getJobByMovieId };
+const getAvailableMovieIds = (movieIds: string[]): string[] =>
+  movieIds.filter((movieId) => {
+    const jobId = movieToJobMap.get(movieId);
+    const job = jobId ? jobs.get(jobId) : undefined;
+    return Boolean(
+      job &&
+        job.status !== 'failed' &&
+        (job.status === 'processing' ||
+          existsSync(
+            path.resolve('src/public/output', job.jobId, 'master.m3u8')
+          ))
+    );
+  });
+
+export {
+  createJob,
+  updateJob,
+  getJob,
+  getJobByMovieId,
+  getAvailableMovieIds,
+};

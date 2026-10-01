@@ -10,6 +10,7 @@ import {
   updateJob,
   getJob,
   getJobByMovieId,
+  getAvailableMovieIds,
 } from '../utils/jobStore.js';
 
 const uploadsDirectory = path.resolve('src/public/data/uploads');
@@ -99,9 +100,19 @@ const uploadVideo = async (req: Request, res: Response): Promise<void> => {
     return;
   }
 
-  const jobId = randomUUID();
-  const movieId = req.body?.movieId ? String(req.body.movieId) : undefined;
   const inputPath = req.file.path;
+  const submittedMovieId = req.body?.movieId;
+  const movieId = submittedMovieId ? String(submittedMovieId).trim() : undefined;
+  if (movieId && !/^[1-9]\d*$/.test(movieId)) {
+    await fs.unlink(inputPath).catch(() => undefined);
+    res.status(StatusCodes.BAD_REQUEST).json({
+      success: false,
+      message: 'movieId must be a positive integer',
+    });
+    return;
+  }
+
+  const jobId = randomUUID();
   const outputPath = path.resolve('src/public/output', jobId);
 
   // Register the job before kicking off FFmpeg
@@ -188,16 +199,16 @@ const getJobStatus = (req: Request<{ jobId: string }>, res: Response): void => {
  *
  * Returns the stream info for a catalog movie ID (used by Catalog / Frontend).
  */
-const getVideoByMovieId = (
+const getVideoByMovieId = async (
   req: Request<{ movieId: string }>,
   res: Response
-): void => {
+): Promise<void> => {
   const { movieId } = req.params;
 
-  if (!movieId) {
+  if (!/^[1-9]\d*$/.test(movieId)) {
     res.status(StatusCodes.BAD_REQUEST).json({
       success: false,
-      message: 'A valid movieId route parameter is required',
+      message: 'movieId must be a positive integer',
     });
     return;
   }
@@ -212,7 +223,34 @@ const getVideoByMovieId = (
     return;
   }
 
-  if (job.status !== 'done' || !job.masterPlaylistUrl) {
+  const masterPlaylistPath = path.resolve(
+    'src/public/output',
+    job.jobId,
+    'master.m3u8'
+  );
+  try {
+    await fs.access(masterPlaylistPath);
+    res.status(StatusCodes.OK).json({
+      success: true,
+      data: {
+        movieId,
+        jobId: job.jobId,
+        status: job.status,
+        streamUrl: job.masterPlaylistUrl || `/streams/${job.jobId}/master.m3u8`,
+      },
+    });
+    return;
+  } catch {}
+
+  if (job.status === 'failed') {
+    res.status(StatusCodes.INTERNAL_SERVER_ERROR).json({
+      success: false,
+      message: job.error || `Video for movie ${movieId} failed to transcode`,
+    });
+    return;
+  }
+
+  if (job.status !== 'done') {
     res.status(StatusCodes.ACCEPTED).json({
       success: true,
       message: `Video for movie ${movieId} is currently ${job.status}`,
@@ -226,15 +264,35 @@ const getVideoByMovieId = (
     return;
   }
 
+  res.status(StatusCodes.NOT_FOUND).json({
+    success: false,
+    message: `No playable stream exists for movie ${movieId}`,
+  });
+};
+
+const getMovieVideoAvailability = (req: Request, res: Response): void => {
+  const movieIds: unknown = req.body?.movieIds;
+  if (
+    !Array.isArray(movieIds) ||
+    movieIds.length > 100 ||
+    movieIds.some(
+      (movieId) =>
+        !Number.isSafeInteger(movieId) || Number(movieId) <= 0
+    )
+  ) {
+    res.status(StatusCodes.BAD_REQUEST).json({
+      success: false,
+      message: 'movieIds must be an array of up to 100 positive integers',
+    });
+    return;
+  }
+
+  const availableMovieIds = getAvailableMovieIds(
+    (movieIds as number[]).map(String)
+  ).map(Number);
   res.status(StatusCodes.OK).json({
     success: true,
-    data: {
-      movieId,
-      jobId: job.jobId,
-      status: job.status,
-      streamUrl: job.masterPlaylistUrl,
-      videoUrl: '/videos/bbb_sunflower_1080p_30fps_normal.mp4',
-    },
+    data: { movieIds: availableMovieIds },
   });
 };
 
@@ -339,6 +397,7 @@ export {
   uploadVideo,
   getJobStatus,
   getVideoByMovieId,
+  getMovieVideoAvailability,
   getRandomUploadVideo,
   getRandomUploadStatus,
 };
